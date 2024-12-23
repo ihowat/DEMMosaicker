@@ -248,7 +248,7 @@ run_buildSubTiles(\
 '${dateFiltStart}','${dateFiltEnd}',\
 ${make2m}); \
 warning('off'); \
-disp('End of matlab command run from qsub_buildSubTiles.sh');"
+disp('End of matlab command run from qsub_buildSubTiles.sh'); exit();"
 # Turning off all warnings at the end of the Matlab command is to avoid this error on Rookery:
 #
 #Warning: Error occurred while executing the listener callback for event

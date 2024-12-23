@@ -260,7 +260,7 @@ run_mosaicSubTiles(\
 '${subTileDir}',${resolution},'${outMatFile}',\
 '${projection}','${version}',${exportTif}); \
 warning('off'); \
-disp('End of matlab command run from qsub_mosaicSubTiles.sh');"
+disp('End of matlab command run from qsub_mosaicSubTiles.sh'); exit()"
 # Turning off all warnings at the end of the Matlab command is to avoid this error on Rookery:
 #
 #Warning: Error occurred while executing the listener callback for event

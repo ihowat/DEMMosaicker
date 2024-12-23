@@ -200,7 +200,7 @@ def main():
             help="Write filled-out running copy of jobscript and then exit")
 
     args = parser.parse_args()
-    if ((not args.submit) or args.test_submit) and (not args.dryrun):
+    if (args.submit or args.test_submit) and (not args.dryrun):
         real_submit = True
     else:
         real_submit = False
