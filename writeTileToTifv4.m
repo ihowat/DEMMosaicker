@@ -524,7 +524,8 @@ if isempty(water_fill_mask) && ismember('waterFillMask', m_varlist)
     water_fill_mask = m.waterFillMask;
 end
 
-bad_data_or_filled_mask = [];
+datamask = ~isnan(z);
+bad_data_or_filled_mask = zeros(length(y), length(x), 'logical');
 masks_array = {
     slope_filter_mask,
     water_fill_mask,
@@ -536,16 +537,14 @@ if ~applySlopeDiffFilt
     masks_array(1) = [];
 end
 if ~all(cellfun(@isempty, masks_array))
-    bad_data_or_filled_mask = zeros(length(y), length(x), 'logical');
     for i = 1:length(masks_array)
         M = masks_array{i};
         if ~isempty(M)
             bad_data_or_filled_mask(M) = 1;
         end
     end
+    datamask = ~(isnan(z) | bad_data_or_filled_mask);
 end
-
-datamask = ~(isnan(z) | bad_data_or_filled_mask);
 
 filled_mask = zeros(length(y), length(x), 'logical');
 filled_masks_array = {
