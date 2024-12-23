@@ -3,6 +3,7 @@ import csv
 import glob
 import os
 import subprocess
+import sys
 
 import geopandas as gpd
 import psycopg2 as pg
@@ -33,6 +34,7 @@ project_water_tile_dir_dict = {
 esa_worldcover_dir = '/mnt/pgc/data/thematic/landcover/esa_worldcover_2021/data/processed'
 gtp_tile_def = ('/mnt/pgc/data/projects/nga/trex/PGC_Package/TREx_GeoTilesPlus_globalIndex.shp')
 script_dir = os.path.dirname(os.path.realpath(__file__))
+script_home = os.path.dirname(script_dir)
 
 
 def main():
@@ -64,6 +66,7 @@ def main():
 
     tile_def_tbl, epsg = project_tile_def_dict[args.project]
     results_dir = os.path.join(os.path.realpath(args.dstdir), 'results')
+    reproject_list_fp = os.path.join(results_dir, 'src', "reprojection_list.txt")
 
     # Connect to Sandwich strip_dem_master
     conn = pg.connect("service=pgc_sandwich_dgarchive")
@@ -74,6 +77,8 @@ def main():
     # For each tile, ID geometry and target EPSG if needed
     df = gpd.read_file(tile_def_tbl)
     tile_bst = []
+    reproject_list = []
+    run_bst = True
     for tile in tiles:
         logger.info(f"Processing tile: {tile}")
 
@@ -87,7 +92,7 @@ def main():
         csvs = [(strips_correct, strips_correct_fp),
                 (strips_to_project, strips_to_project_fp)]
         # Derive epsg from tile name if needed
-        if epsg is None:
+        if args.project == 'earthdem':
             tileparts = tile.split('_')
             if len(tileparts) != 3:
                 logger.error("Tile name has not utm zone preface so target projection cannot be derived")
@@ -105,7 +110,8 @@ def main():
         #     with open(strips_correct_fp, 'r') as csvfile:
         #
         # else:
-            # Get tile geometry as WKT
+
+        # Get tile geometry as WKT
         df2 = df[df.name == tile]
         if len(df2) > 1:
             logger.error(f"Tile '{tile}' has more than one record")
@@ -116,7 +122,7 @@ def main():
         logger.info(f"Tile geometry: {wkt}")
         sql_query = (f"select dem_id, stripdemid, epsg, location "
                      f"from dem.strip_dem_master sdm "
-                     f"where sdm.dem_res = 2 and sdm.is_lsf is false "
+                     f"where sdm.dem_res = 2 "
                      f"and st_intersects(sdm.wkb_geometry, st_geomfromtext('{wkt}', 4326))")
         cur.execute(sql_query)
         results = cur.fetchall()
@@ -155,42 +161,68 @@ def main():
                 if not os.path.isfile(dstfile):
                     os.link(sf, dstfile)
 
-        # Verify all strips are present and write a semophore?
+        # Prep strips for reprojection (if needed)
+        compile_db = True
+        if len(strips_to_project) > 0:
+            tile_proj_strip_dir = os.path.join(tile_dir, '2m_proj')
+            proj_completed = glob.glob(tile_proj_strip_dir + '/*/*_meta.txt')
+            if len(proj_completed) >= len(strips_to_project):
+                logger.info("Border strips reprojected")
+            if len(proj_completed) < len(strips_to_project):
+                logger.info(f"Reprojecting strips")
+                compile_db = False
+                run_bst = False
+                for result in strips_to_project:
+                    srcfile = result[3].replace('_dem.tif','_meta.txt')
+                    srcdir_name = os.path.basename(os.path.dirname(srcfile))
+                    dstdir = os.path.join(tile_proj_strip_dir, srcdir_name)
+                    reproject_list.append([srcfile, dstdir, epsg])
 
-        # TODO Submit slurm task to project strips (if needed)
-        # logger.info(f"Reprojecting strips - TODO")
+        # Compile DB
+        if compile_db:
+            if len(strips_correct) > 0 or len(strips_to_project) > 0:
+                dbase_out = os.path.join(tile_dir, f'{tile}_db.mat')
+                if not os.path.isfile(dbase_out):
+                    logger.info("Compiling matlab strip DB")
+                    matlab_cmd = (f"matlab -nodisplay -nodesktop -nosplash -r \"addpath('{script_dir}'); "
+                                  f"compileDatabase4_func('{tile_dir}', '{dbase_out}'); exit();\"")
+                    logger.info(matlab_cmd)
+                    subprocess.call(matlab_cmd, shell=True)
 
-        # If projection complete, compile DB, write semaphore - build to handle rerun
-        if len(strips_to_project) == 0:
-            dbase_out = os.path.join(tile_dir, f'{tile}_db.mat')
-            if not os.path.isfile(dbase_out):
-                logger.info("Compiling matlab strip DB")
-                matlab_cmd = (f"matlab -nodisplay -nodesktop -nosplash -r \"addpath('{script_dir}'); "
-                              f"compileDatabase4_func('{tile_dir}', '{dbase_out}'); exit();\"")
-                logger.info(matlab_cmd)
-                subprocess.call(matlab_cmd, shell=True)
+                # Add BST cmd to the list
+                if os.path.isfile(dbase_out):
+                    utmzone = tile.split('_')[0]
+                    water_tile_dir = project_water_tile_dir_dict[args.project]
+                    water_tile_dir = water_tile_dir if args.project != 'earthdem' else os.path.join(water_tile_dir, utmzone)
+                    # Build water tile if needed
+                    water_tile = os.path.join(water_tile_dir, f'{tile}_water.tif')
+                    if not os.path.isfile(water_tile):
+                        logger.info("Building water tile")
+                        os.makedirs(water_tile_dir, exist_ok=True)
+                        src_water_tile = os.path.join(esa_worldcover_dir, utmzone, f'{tile}_10m_esa_worldcover_2021.tif')
+                        water_cmd = (f'gdal_calc.py --calc "logical_and(A>=80,A<=80)" '
+                                     f'-A {src_water_tile} --outfile {water_tile}')
+                        subprocess.call(water_cmd, shell=True)
+                    bst_cmd = (f'python {script_dir}/batch_buildSubTiles.py {results_dir} {tile} --project {args.project} --strip-db '
+                               f'{dbase_out} --water-tile-dir {water_tile_dir} --chain-mst --rerun --slurm')
+                    tile_bst.append(bst_cmd)
 
-            # Add BST cmd to the list
-            if os.path.isfile(dbase_out):
-                utmzone = tile.split('_')[0]
-                water_tile_dir = project_water_tile_dir_dict[args.project]
-                water_tile_dir = water_tile_dir if args.project != 'earthdem' else os.path.join(water_tile_dir, utmzone)
-                # Build water tile if needed
-                water_tile = os.path.join(water_tile_dir, f'{tile}_water.tif')
-                if not os.path.isfile(water_tile):
-                    logger.info("Building water tile")
-                    os.makedirs(water_tile_dir, exist_ok=True)
-                    src_water_tile = os.path.join(esa_worldcover_dir, utmzone, f'{tile}_10m_esa_worldcover_2021.tif')
-                    water_cmd = (f'gdal_calc.py --calc "logical_and(A>=80,A<=80)" '
-                                 f'-A {src_water_tile} --outfile {water_tile}')
-                    subprocess.call(water_cmd, shell=True)
-                bst_cmd = (f'python {script_dir}/batch_buildSubTiles.py {results_dir} {tile} --project {args.project} --strip-db '
-                           f'{dbase_out} --water-tile-dir {water_tile_dir} --chain-mst --rerun --slurm')
-                tile_bst.append(bst_cmd)
+    # Run reprojection jobs for border strips
+    if len(reproject_list) > 0:
+        with open(reproject_list_fp, 'w', newline='') as csvfile:
+            csvwriter = csv.writer(csvfile, delimiter=' ')
+            csvwriter.writerows(reproject_list)
+        os.makedirs(tile_proj_strip_dir, exist_ok=True)
+        reproj_cmd = (f'python {script_home}/setsm_postprocessing_python/reproject_setsm.py {reproject_list_fp}'
+                      f' --scheduler slurm --tasks-per-job 20')
+        subprocess.call(reproj_cmd, shell=True)
+        logger.info("Reprojection job(s) submitted.  Wait for them to complete and rerun this script.")
 
-    if len(tile_bst) > 0:
+    # If everything is ready, submit the BST+MST jobs
+    if run_bst and len(tile_bst) > 0:
         logger.info("Submitting BST jobs")
         for bst_cmd in tile_bst:
+            os.makedirs(results_dir, exist_ok=True)
             logger.info(bst_cmd)
             subprocess.call(bst_cmd, shell=True)
 
