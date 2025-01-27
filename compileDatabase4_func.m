@@ -1,6 +1,7 @@
 function compileDatabase4_func(regionDir, dbase_out)
     % Compile a matlab DB of the strips in the regionDir folder and
-    % write to the file dbase_out.
+    % write to the file dbase_out. Designed to work with the dem_mosaic_strip_prep.py
+    % script which puts strip DEMs in directories called 2m and 2m_proj.
 
     [scriptdir, name, ext] = fileparts(mfilename('fullpath'));
     addpath([scriptdir, '/../setsm_postprocessing4/']);
@@ -42,8 +43,7 @@ function compileDatabase4_func(regionDir, dbase_out)
     regionDirs=cellfun(@(regionDir, regionName) [regionDir,'/',regionName], {regionDirs.folder}, {regionDirs.name},...
         'UniformOutput',false);
 
-    regionDirs = regionDirs((~cellfun('isempty', regexp(regionDirs, '.*/2m$')) | (~cellfun('isempty', regexp(regionDirs, '.*/2m_utm\d{2}[ns]$')))));
-
+    regionDirs = regionDirs((~cellfun('isempty', regexp(regionDirs, '.*/2m$')) | (~cellfun('isempty', regexp(regionDirs, '.*/2m_proj$')))));
 
     if exist('dbase_in', 'var') && ~isempty(dbase_in)
         if ~isfile(dbase_in)
