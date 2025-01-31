@@ -333,26 +333,33 @@ parfor n=nstrt:subN
     end
 
     if exist(check_outName,'file')
-        % check to make sure subtile file is complete
-        mvars = who('-file',check_outName);
-        if ~any(ismember(mvars,'za_med'))
-            % if not, delete
-            fprintf('deleting 10m/2m components of incomplete existing subtile file: %s\n',check_outName)
+        invalid = false;
+        % check to make sure subtile file is valid and complete
+        try  % try to open the file
+            mvars = who('-file',check_outName);
+            if ~any(ismember(mvars,'za_med'))  % if it's not complete, delete it
+                invalid = true;
+            else
+                fprintf('subtile file already exists, skipping: %s\n',check_outName)
+                continue
+            end
+        catch % if it's invalid, delete it
+            invalid = true;
+        end
+        if invalid
+            fprintf('deleting 10m/2m components of corrupted or incomplete existing subtile file: %s\n',check_outName)
             if exist(outName,'file')
                 delete(outName)
             end
             if exist(outName2m,'file')
                 delete(outName2m)
             end
-        else
-            fprintf('subtile file already exists, skipping: %s\n',check_outName)
-            continue
         end
     elseif exist(check_finName,'file')
         fprintf('subtile-is-finished indicator file for empty subtile already exists, skipping: %s\n',check_finName)
         continue
     end
-    
+
     x=subx0(n):res:subx1(n);
     y=suby1(n):-res:suby0(n);
     y=y(:);
